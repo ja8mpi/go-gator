@@ -158,7 +158,7 @@ func handleAgg(s *state, cmd command) error {
 	return nil
 }
 
-func handleAddFeed(s *state, cmd command) error {
+func handleAddFeed(s *state, cmd command, user database.User) error {
 	if len(cmd.arguments) < 2 {
 		return fmt.Errorf("Need name and url as well")
 	}
@@ -266,15 +266,9 @@ func handleFeeds(s *state, cmd command) error {
 	return nil
 }
 
-func handleFollow(s *state, cmd command) error {
+func handleFollow(s *state, cmd command, user database.User) error {
 	if len(cmd.arguments) <= 0 {
 		return fmt.Errorf("no arguments provided")
-	}
-	user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
-	if err != nil {
-		fmt.Println("User does not exists")
-		os.Exit(1)
-		return err
 	}
 	url := cmd.arguments[0]
 	feed, err := s.db.GetFeedByUrl(context.Background(), url)
@@ -300,8 +294,34 @@ func handleFollow(s *state, cmd command) error {
 	return nil
 }
 
-func handleFollowing(s *state, cmd command) error {
-	feedFollows, err := s.db.GetFeedFollowsForUser(context.Background(), s.cfg.CurrentUserName)
+func handleUnfollow(s *state, cmd command, user database.User) error {
+	if len(cmd.arguments) <= 0 {
+		return fmt.Errorf("no arguments provided")
+	}
+	url := cmd.arguments[0]
+
+	feed, err := s.db.GetFeedByUrl(context.Background(), url)
+	if err != nil {
+		os.Exit(1)
+		return err
+	}
+
+	err = s.db.DeleteFeedFollow(context.Background(), database.DeleteFeedFollowParams{
+		FeedID: feed.ID,
+		UserID: user.ID,
+	})
+	if err != nil {
+		fmt.Println("Error unfollowing feed")
+		os.Exit(1)
+		return err
+	}
+
+	return nil
+}
+
+func handleFollowing(s *state, cmd command, user database.User) error {
+
+	feedFollows, err := s.db.GetFeedFollowsForUser(context.Background(), user.Name)
 	if err != nil {
 		fmt.Println("Error getting feeds for current user")
 		os.Exit(1)
@@ -312,6 +332,19 @@ func handleFollowing(s *state, cmd command) error {
 		fmt.Printf("%v\n", feed.FeedName)
 	}
 	return nil
+}
+
+func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
+	return func(s *state, cmd command) error {
+		// Retrieve the user from somewhere, for example s or cmd
+		user, err := s.db.GetUser(context.Background(), s.cfg.CurrentUserName)
+		if err != nil {
+			return err // or return some kind of "not logged in" error
+		}
+
+		// Call the original handler with the user injected
+		return handler(s, cmd, user)
+	}
 }
 
 func main() {
@@ -336,10 +369,11 @@ func main() {
 	coms.register("reset", handleReset)
 	coms.register("users", handleGetAllUsers)
 	coms.register("agg", handleAgg)
-	coms.register("addfeed", handleAddFeed)
+	coms.register("addfeed", middlewareLoggedIn(handleAddFeed))
 	coms.register("feeds", handleFeeds)
-	coms.register("follow", handleFollow)
-	coms.register("following", handleFollowing)
+	coms.register("follow", middlewareLoggedIn(handleFollow))
+	coms.register("following", middlewareLoggedIn(handleFollowing))
+	coms.register("unfollow", middlewareLoggedIn(handleUnfollow))
 
 	args := os.Args[1:]
 	if len(args) == 0 {
