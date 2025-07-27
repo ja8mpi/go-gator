@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"html"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -347,6 +348,30 @@ func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) 
 	}
 }
 
+func makeNullString(s string) sql.NullString {
+	return sql.NullString{String: s, Valid: s != ""}
+}
+
+func makeNullTime(t time.Time) sql.NullTime {
+	return sql.NullTime{Time: t, Valid: !t.IsZero()}
+}
+
+func parsePubDate(dateStr string) time.Time {
+	formats := []string{
+		time.RFC1123Z, time.RFC1123, time.RFC3339,
+		"Mon, 2 Jan 2006 15:04:05 MST",
+	}
+
+	for _, layout := range formats {
+		if t, err := time.Parse(layout, dateStr); err == nil {
+			return t
+		}
+	}
+
+	log.Printf("Failed to parse pubDate: %s", dateStr)
+	return time.Now()
+}
+
 func scrapeFeeds(s *state, cmd command) error {
 	if len(cmd.arguments) < 1 {
 		return fmt.Errorf("please specify how often to fetch the feed")
@@ -376,7 +401,21 @@ func scrapeFeeds(s *state, cmd command) error {
 		}
 
 		for _, f := range feed.Channel.Item {
-			fmt.Printf("%v\n", f.Title)
+
+			err := s.db.CreatePost(context.Background(), database.CreatePostParams{
+				ID:          uuid.New(),
+				CreatedAt:   makeNullTime(time.Now()),
+				UpdatedAt:   makeNullTime(time.Now()),
+				Title:       makeNullString(f.Title),
+				Url:         makeNullString(f.Link),
+				Description: makeNullString(f.Description),
+				PublishedAt: makeNullTime(parsePubDate(f.PubDate)),
+				FeedID:      nextFeed.ID,
+			})
+
+			if err != nil {
+				fmt.Println(err)
+			}
 		}
 	}
 
