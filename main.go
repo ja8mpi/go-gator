@@ -288,8 +288,8 @@ func handleFollow(s *state, cmd command, user database.User) error {
 		os.Exit(1)
 		return err
 	}
-	fmt.Println("%v", s.cfg.CurrentUserName)
-	fmt.Println("%v", feed.Name)
+	fmt.Printf("%v\n", s.cfg.CurrentUserName)
+	fmt.Printf("%v\n", feed.Name)
 
 	return nil
 }
@@ -347,6 +347,12 @@ func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) 
 	}
 }
 
+func scrapeFeeds(time_between_reqs string) error {
+	nextFeed := db.GetFeeds
+
+	return nil
+}
+
 func main() {
 
 	var cfg config.Config
@@ -374,6 +380,7 @@ func main() {
 	coms.register("follow", middlewareLoggedIn(handleFollow))
 	coms.register("following", middlewareLoggedIn(handleFollowing))
 	coms.register("unfollow", middlewareLoggedIn(handleUnfollow))
+	coms.register("add", middlewareLoggedIn(scrapeFeeds))
 
 	args := os.Args[1:]
 	if len(args) == 0 {
