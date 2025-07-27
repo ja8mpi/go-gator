@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -285,7 +286,7 @@ func handleFollow(s *state, cmd command, user database.User) error {
 	})
 
 	if err != nil {
-		fmt.Println("Error creating follow")
+		fmt.Println("Error creating follow", err)
 		os.Exit(1)
 		return err
 	}
@@ -332,6 +333,36 @@ func handleFollowing(s *state, cmd command, user database.User) error {
 	for _, feed := range feedFollows {
 		fmt.Printf("%v\n", feed.FeedName)
 	}
+	return nil
+}
+
+func handelBrowse(s *state, cmd command, user database.User) error {
+	const defaultLimit = 2
+
+	// Default limit
+	postLimit := defaultLimit
+
+	// Try to parse optional limit from cmd.Arguments[0]
+	if len(cmd.arguments) > 0 {
+		if parsedLimit, err := strconv.Atoi(cmd.arguments[0]); err == nil && parsedLimit > 0 {
+			postLimit = parsedLimit
+		}
+	}
+
+	// Now you can use postLimit
+	posts, err := s.db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
+		UserID: user.ID,
+		Limit:  int32(postLimit),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get posts: %w", err)
+	}
+
+	// Process or print the posts
+	for _, p := range posts {
+		fmt.Println(p.Title.String)
+	}
+
 	return nil
 }
 
@@ -449,6 +480,7 @@ func main() {
 	coms.register("following", middlewareLoggedIn(handleFollowing))
 	coms.register("unfollow", middlewareLoggedIn(handleUnfollow))
 	coms.register("agg", scrapeFeeds)
+	coms.register("browse", middlewareLoggedIn(handelBrowse))
 
 	args := os.Args[1:]
 	if len(args) == 0 {
