@@ -6,8 +6,10 @@ import (
 	"encoding/xml"
 	"fmt"
 	"html"
+	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -284,12 +286,12 @@ func handleFollow(s *state, cmd command, user database.User) error {
 	})
 
 	if err != nil {
-		fmt.Println("Error creating follow")
+		fmt.Println("Error creating follow", err)
 		os.Exit(1)
 		return err
 	}
-	fmt.Println("%v", s.cfg.CurrentUserName)
-	fmt.Println("%v", feed.Name)
+	fmt.Printf("%v\n", s.cfg.CurrentUserName)
+	fmt.Printf("%v\n", feed.Name)
 
 	return nil
 }
@@ -334,6 +336,36 @@ func handleFollowing(s *state, cmd command, user database.User) error {
 	return nil
 }
 
+func handelBrowse(s *state, cmd command, user database.User) error {
+	const defaultLimit = 2
+
+	// Default limit
+	postLimit := defaultLimit
+
+	// Try to parse optional limit from cmd.Arguments[0]
+	if len(cmd.arguments) > 0 {
+		if parsedLimit, err := strconv.Atoi(cmd.arguments[0]); err == nil && parsedLimit > 0 {
+			postLimit = parsedLimit
+		}
+	}
+
+	// Now you can use postLimit
+	posts, err := s.db.GetPostsForUser(context.Background(), database.GetPostsForUserParams{
+		UserID: user.ID,
+		Limit:  int32(postLimit),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to get posts: %w", err)
+	}
+
+	// Process or print the posts
+	for _, p := range posts {
+		fmt.Println(p.Title.String)
+	}
+
+	return nil
+}
+
 func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) error) func(*state, command) error {
 	return func(s *state, cmd command) error {
 		// Retrieve the user from somewhere, for example s or cmd
@@ -345,6 +377,79 @@ func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) 
 		// Call the original handler with the user injected
 		return handler(s, cmd, user)
 	}
+}
+
+func makeNullString(s string) sql.NullString {
+	return sql.NullString{String: s, Valid: s != ""}
+}
+
+func makeNullTime(t time.Time) sql.NullTime {
+	return sql.NullTime{Time: t, Valid: !t.IsZero()}
+}
+
+func parsePubDate(dateStr string) time.Time {
+	formats := []string{
+		time.RFC1123Z, time.RFC1123, time.RFC3339,
+		"Mon, 2 Jan 2006 15:04:05 MST",
+	}
+
+	for _, layout := range formats {
+		if t, err := time.Parse(layout, dateStr); err == nil {
+			return t
+		}
+	}
+
+	log.Printf("Failed to parse pubDate: %s", dateStr)
+	return time.Now()
+}
+
+func scrapeFeeds(s *state, cmd command) error {
+	if len(cmd.arguments) < 1 {
+		return fmt.Errorf("please specify how often to fetch the feed")
+	}
+	timeBetweenRequests, err := time.ParseDuration(cmd.arguments[0])
+	if err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(timeBetweenRequests)
+	fmt.Printf("Collecting feeds every %v\n", timeBetweenRequests)
+	for ; ; <-ticker.C {
+
+		nextFeed, err := s.db.GetNextFeedToFetch(context.Background())
+		if err != nil {
+			return err
+		}
+
+		err = s.db.MarkFeedFetched(context.Background(), nextFeed.ID)
+		if err != nil {
+			return err
+		}
+
+		feed, err := fetchFeed(context.Background(), nextFeed.Url)
+		if err != nil {
+			return err
+		}
+
+		for _, f := range feed.Channel.Item {
+
+			err := s.db.CreatePost(context.Background(), database.CreatePostParams{
+				ID:          uuid.New(),
+				CreatedAt:   makeNullTime(time.Now()),
+				UpdatedAt:   makeNullTime(time.Now()),
+				Title:       makeNullString(f.Title),
+				Url:         makeNullString(f.Link),
+				Description: makeNullString(f.Description),
+				PublishedAt: makeNullTime(parsePubDate(f.PubDate)),
+				FeedID:      nextFeed.ID,
+			})
+
+			if err != nil {
+				fmt.Println(err)
+			}
+		}
+	}
+
 }
 
 func main() {
@@ -374,6 +479,8 @@ func main() {
 	coms.register("follow", middlewareLoggedIn(handleFollow))
 	coms.register("following", middlewareLoggedIn(handleFollowing))
 	coms.register("unfollow", middlewareLoggedIn(handleUnfollow))
+	coms.register("agg", scrapeFeeds)
+	coms.register("browse", middlewareLoggedIn(handelBrowse))
 
 	args := os.Args[1:]
 	if len(args) == 0 {
