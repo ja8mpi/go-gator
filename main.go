@@ -347,10 +347,39 @@ func middlewareLoggedIn(handler func(s *state, cmd command, user database.User) 
 	}
 }
 
-func scrapeFeeds(time_between_reqs string) error {
-	nextFeed := db.GetFeeds
+func scrapeFeeds(s *state, cmd command) error {
+	if len(cmd.arguments) < 1 {
+		return fmt.Errorf("please specify how often to fetch the feed")
+	}
+	timeBetweenRequests, err := time.ParseDuration(cmd.arguments[0])
+	if err != nil {
+		return err
+	}
 
-	return nil
+	ticker := time.NewTicker(timeBetweenRequests)
+	fmt.Printf("Collecting feeds every %v\n", timeBetweenRequests)
+	for ; ; <-ticker.C {
+
+		nextFeed, err := s.db.GetNextFeedToFetch(context.Background())
+		if err != nil {
+			return err
+		}
+
+		err = s.db.MarkFeedFetched(context.Background(), nextFeed.ID)
+		if err != nil {
+			return err
+		}
+
+		feed, err := fetchFeed(context.Background(), nextFeed.Url)
+		if err != nil {
+			return err
+		}
+
+		for _, f := range feed.Channel.Item {
+			fmt.Printf("%v\n", f.Title)
+		}
+	}
+
 }
 
 func main() {
@@ -380,7 +409,7 @@ func main() {
 	coms.register("follow", middlewareLoggedIn(handleFollow))
 	coms.register("following", middlewareLoggedIn(handleFollowing))
 	coms.register("unfollow", middlewareLoggedIn(handleUnfollow))
-	coms.register("add", middlewareLoggedIn(scrapeFeeds))
+	coms.register("agg", scrapeFeeds)
 
 	args := os.Args[1:]
 	if len(args) == 0 {
